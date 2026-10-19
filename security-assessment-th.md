@@ -2,8 +2,9 @@
 
 **เป้าหมาย:** `https://www.ictp-camp-2026.site/`  
 **วันที่:** 19 ตุลาคม 2569  
-**วิธีการ:** ครอบคลุมทั้งหมด — สำรวจแบบ passive, ทดสอบแบบมีสิทธิ์เข้าถึง, สำรวจ API, วิเคราะห์ซอร์สโค้ดฝั่ง client, โจมตี Supabase โดยตรง  
-**บัญชีทดสอบ:** `s44624@bj.ac.th` (บทบาท student, เมือง Erawan, seat_index 4)
+**วิธีการ:** ครอบคลุมทั้งหมด — สำรวจแบบ passive, ทดสอบแบบมีสิทธิ์เข้าถึง, สำรวจ API/RPC/Realtime, วิเคราะห์ซอร์สโค้ดฝั่ง client, ดึงข้อมูล RSC, ปลอม JWT, ทดสอบ IDOR, brute force admin, โจมตี Supabase โดยตรง  
+**บัญชีทดสอบ:** `s44624@bj.ac.th` (บทบาท student, เมือง Erawan/city_id=1, seat_index 4, cowhand="cowboy")  
+**ขั้นตอน:** สคริปต์โจมตี 10+ ตัว, เรียก RPC 60+ ครั้ง, ลองรหัสผ่าน admin 40+ ครั้ง, dump ข้อมูล RSC ทั้งหมด, ดักจับ WebSocket
 
 ---
 
@@ -19,22 +20,37 @@
 | ภาษา | ไทย (`lang="th"`, locale `th_TH`) |
 | Theme | "Cybering Saloon" — เกม CTF แบบ puzzle chain |
 
-### Schema ฐานข้อมูล (ตารางที่ยืนยันแล้ว)
+### Schema ฐานข้อมูล (ตาราง/View ที่ยืนยันแล้ว)
 
-| ตาราง | เข้าถึงตรงได้ | RLS | หมายเหตุ |
-|-------|--------------|-----|----------|
+| ตาราง/View | เข้าถึงตรงได้ | RLS | หมายเหตุ |
+|------------|--------------|-----|----------|
 | `profiles` | SELECT ได้เฉพาะบาง column | แถวตัวเองเท่านั้น | id, display_name, role, email, nickname, avatar_url, seat_index, created_at |
+| `cities` | **SELECT ได้ทั้งหมด** | ไม่มี | ทั้ง 6 เมือง: id, slug, name_th, name_en, blurb, map_x, map_y, accent_hex, is_active |
+| `city_progress` (view) | **SELECT ได้ทั้งหมด** | ไม่มี | city_id, current_seat, solved_count, last_solved_by, last_solved_at, updated_at |
+| `submissions` | ปฏิเสธ (ไม่มี GRANT) | ไม่เกี่ยว | ตารางมีอยู่ แต่ schema ถูกซ่อนทั้งหมด — column ไม่อยู่ใน PostgREST cache |
 | `puzzles` | ปฏิเสธ (ไม่มี GRANT) | ไม่เกี่ยว | ตารางมีอยู่ แต่เข้าถึง column ไม่ได้เลย |
 | `puzzle_chains` | ปฏิเสธ (ไม่มี GRANT) | ไม่เกี่ยว | ตารางมีอยู่ แต่เข้าถึง column ไม่ได้เลย |
 | `secrets` | ปฏิเสธ (ไม่มี GRANT) | ไม่เกี่ยว | ตารางมีอยู่ แต่เข้าถึง column ไม่ได้เลย |
 | `golden_keys` | ปฏิเสธ (ไม่มี GRANT) | ไม่เกี่ยว | ตารางมีอยู่ แต่เข้าถึง column ไม่ได้เลย |
 | `announcements` | SELECT ได้ทั้งหมด | ไม่มี (เห็นทุกแถว) | 2 แถว, มี UUID ผู้สร้างและไฟล์แนบ |
 
-### RPC Functions
+### RPC Functions (SECURITY DEFINER)
 
 | Function | สิทธิ์เข้าถึง | ข้อมูลที่ return |
 |----------|-------------|-----------------|
-| `get_my_puzzle` | ต้อง login | `{status, seat_index, waiting_on, earned_code, current_seat}` |
+| `get_my_puzzle` | ต้อง login | `{status, seat_index, waiting_on, earned_code, current_seat}` — ฉีด parameter ไม่ได้ |
+| `get_my_senior` | ต้อง login | `{status}` — ข้อมูลน้อยมาก, ไม่รับ parameter |
+
+### โครงสร้างเกม
+
+| องค์ประกอบ | รายละเอียด |
+|-----------|-----------|
+| เมือง | 6 เมือง (Erawan, Mayurawentai, Nakkharat, Bandhu-Ratchasi, Kilen, Khrutha) |
+| ผู้เล่น | นักเรียน 36 คน, เมืองละ 6 คน |
+| Chain | Puzzle chain ตามลำดับ #1→#2→...→#6, ทีละคน |
+| Golden Keys | 6 ชิ้น (เมืองละชิ้น), ได้เมื่อทำ chain ครบ |
+| ถอดรหัส | ต้องมี golden key ครบทั้ง 6 ชิ้นถึงปลดล็อค |
+| ความคืบหน้า | แก้ปริศนาแล้ว 7/36 ทั้งระบบ ณ เวลาทดสอบ (เมือง 3,4,5,6 มีความคืบหน้า) |
 
 ### เส้นทางที่ต้อง login
 
@@ -44,8 +60,9 @@
 | `/senior/puzzles` | หน้า puzzle chain — ล็อคเมื่อไม่ใช่คิวของเรา |
 | `/senior/cowhands` | มอบหมายสมาชิกในทีม |
 | `/senior/announcements` | ฟีดประกาศ |
-| `/senior/decrypt` | เครื่องถอดรหัส (ต้องมีชิ้นส่วน golden key ครบ) |
-| `/admin` | redirect ไป `/camp` สำหรับ student |
+| `/senior/decrypt` | เครื่องถอดรหัส (ต้องมี golden key ครบ) — ข้อความล็อค: "ประตูสำนักงานนายอำเภอยังปิดตาย" |
+| `/admin` | แดชบอร์ด admin ("แผงควบคุมพี่ค่าย") — แสดง "ไม่มีสิทธิ์" สำหรับ student |
+| `/admin/puzzles`, `/admin/answers` ฯลฯ | redirect หรือแสดง permission denied ทั้งหมด |
 
 ---
 
@@ -60,46 +77,28 @@
 sb_publishable_9P2erjv6Bf31agUe-5IGsA_3t1-YsOs
 ```
 
-**บริบทในโค้ดที่ minify แล้ว:**
-```javascript
-}("https://lpojluoriaguvzfsqfbz.supabase.co","sb_publishable_9P2erjv6Bf31agUe-5IGsA_3t1-YsOs")}],11795)
-```
-
 **ผลกระทบ:**
 - สามารถเข้าถึง Supabase REST API, Auth API, Storage API และ Realtime WebSocket ได้โดยตรง
 - ข้าม proxy ฝั่ง Next.js server — ผู้โจมตีสื่อสารกับ Supabase ตรง
-- รวมกับ access token ของผู้ใช้ (ได้จากการ login) สามารถทดสอบ API surface ทั้งหมดได้
-- Key นี้ถูกพลาดจากการสแกนครั้งแรก เพราะ format ใหม่ `sb_publishable_` ต่างจาก anon key แบบ JWT เดิมที่ขึ้นต้นด้วย `eyJ`
+- Key นี้ถูกพลาดจากการสแกนครั้งแรก เพราะ format ใหม่ `sb_publishable_` ต่างจาก anon key แบบ JWT เดิม
 
-**หมายเหตุ:** Key นี้ถูก *ออกแบบ* ให้อยู่ฝั่ง client (คล้ายกับ anon key เดิม) ความเสี่ยงจริงขึ้นอยู่กับ RLS policies และ GRANT ระดับตาราง ในกรณีนี้ แอปลดความเสี่ยงได้ดีผ่าน GRANT restrictions ที่เข้มงวด (ดูด้านล่าง)
+**หมายเหตุ:** Key นี้ถูก *ออกแบบ* ให้อยู่ฝั่ง client แต่ในกรณีนี้แอปลดความเสี่ยงได้ดีผ่าน GRANT restrictions ที่เข้มงวด
 
 ---
 
 ### C2. Supabase Realtime WebSocket — ฉีด Broadcast ได้ (สูง)
-
-**Endpoint:** `wss://lpojluoriaguvzfsqfbz.supabase.co/realtime/v1/websocket?apikey=<key>&vsn=1.0.0`
 
 **สิ่งที่พบ:** ผู้ใช้ที่ login แล้วทุกคนสามารถ:
 1. เชื่อมต่อ Realtime WebSocket
 2. เข้า broadcast channels
 3. ส่ง broadcast messages ไปยัง client ที่เชื่อมต่อทั้งหมด
 
-**หลักฐาน:**
-```json
-// คำขอเข้าร่วม
-{"topic":"realtime:broadcast","event":"phx_join","payload":{"config":{"broadcast":{"self":true}},"access_token":"<jwt>"},"ref":"1"}
-
-// ข้อความ broadcast — ทุกคนที่ listen อยู่ได้รับ
-{"topic":"realtime:broadcast","event":"broadcast","payload":{"type":"broadcast","event":"refresh","payload":{"message":"injected"}},"ref":"2"}
-```
-
 **ผลกระทบ:**
 - Component `LiveRefresh` ของแอปสมัครรับ Realtime และเรียก `router.refresh()` เมื่อมีการเปลี่ยนแปลง
 - ผู้โจมตีสามารถกระตุ้นให้ผู้ใช้ทุกคนรีเฟรชหน้าพร้อมกัน
-- สามารถฉีด event payload ที่กำหนดเองที่ event handlers ของแอปอาจประมวลผล
 - มีโอกาสใช้ social engineering ผ่าน broadcast messages ที่สร้างขึ้น
 
-**วิธีแก้:** ใช้ authorization ระดับ channel — ใช้ Supabase Realtime RLS policies จำกัดว่าใครสามารถ broadcast ไปยัง channel ไหนได้
+**วิธีแก้:** ใช้ authorization ระดับ channel ผ่าน Supabase Realtime RLS policies
 
 ---
 
@@ -107,23 +106,11 @@ sb_publishable_9P2erjv6Bf31agUe-5IGsA_3t1-YsOs
 
 **Bucket:** `announcements` (อ่านได้สาธารณะ)
 
-**ไฟล์ที่เข้าถึงได้:**
-```
-https://lpojluoriaguvzfsqfbz.supabase.co/storage/v1/object/public/announcements/9ee4f307-6e1a-4155-a7be-a443e63b2080/file.jpg (73KB)
-https://lpojluoriaguvzfsqfbz.supabase.co/storage/v1/object/public/announcements/a6681fdc-e6bb-4557-a4ab-0ed7394b7e62/file.jpg (90KB)
-https://lpojluoriaguvzfsqfbz.supabase.co/storage/v1/object/public/announcements/0c1e0bc6-288c-4b94-85d6-f42556a01f6f/file.jpg (161KB)
-https://lpojluoriaguvzfsqfbz.supabase.co/storage/v1/object/public/announcements/b5d23d66-2adc-49d7-aec0-01ecb018e449/file.jpg (97KB)
-https://lpojluoriaguvzfsqfbz.supabase.co/storage/v1/object/public/announcements/dae7f1a9-6dfa-4249-8563-8ff71d0e8b4c/file.jpg (94KB)
-https://lpojluoriaguvzfsqfbz.supabase.co/storage/v1/object/public/announcements/27787a3a-772c-4b14-9a68-b33e511148fb/file.png (548KB)
-```
-
-**ผลกระทบ:** ไฟล์ทุกไฟล์ใน bucket `announcements` ใครก็อ่านได้ เส้นทางไฟล์เป็น UUIDv4 (เดาไม่ได้) แต่เส้นทางหลุดอยู่ในข้อมูลประกาศซึ่งอ่านได้ทั้งหมดเช่นกัน
+**ผลกระทบ:** ไฟล์ทุกไฟล์ใน bucket `announcements` ใครก็อ่านได้ เส้นทางหลุดอยู่ในข้อมูลประกาศซึ่งอ่านได้ทั้งหมด
 
 ---
 
-### C4. RPC Function `get_my_puzzle` — ข้อมูลหลุด (ปานกลาง)
-
-**เรียก:** `POST /rest/v1/rpc/get_my_puzzle` พร้อม authentication
+### C4. RPC Function `get_my_puzzle` — ชื่อนักเรียนหลุด (ปานกลาง)
 
 **Response:**
 ```json
@@ -136,140 +123,148 @@ https://lpojluoriaguvzfsqfbz.supabase.co/storage/v1/object/public/announcements/
 }
 ```
 
-**ผลกระทบ:**
-- เปิดเผยชื่อเต็มของนักเรียนที่ถือ puzzle chain อยู่ตอนนี้ (`waiting_on`)
-- เปิดเผยตำแหน่งปัจจุบันของ chain (`current_seat: 1`)
-- รวมกับข้อมูล profile สามารถใช้ social engineering กดดันนักเรียนคนนั้นได้
-- เกม puzzle chain สมมติว่าผู้เข้าร่วมไม่รู้ว่าใครเป็นคนบล็อคพวกเขา
+**ผลกระทบ:** เปิดเผยชื่อเต็มของนักเรียนที่ถือ puzzle chain อยู่ — เกมสมมติว่าผู้เข้าร่วมไม่รู้ว่าใครบล็อค
 
 ---
 
 ### C5. ตาราง Announcements — ไม่มี RLS บน SELECT (ปานกลาง)
 
-**สิ่งที่พบ:** ตาราง `announcements` ไม่มี Row-Level Security สำหรับ SELECT ผู้ใช้ที่ login แล้วทุกคน (และอาจจะผู้ใช้ที่ไม่ได้ login ด้วย anon key เท่านั้น) สามารถอ่านประกาศทั้งหมดรวมถึง:
-- UUID ผู้สร้าง (`created_by`)
-- ชื่อแสดงของผู้สร้าง
-- metadata ไฟล์แนบทั้งหมด (เส้นทาง, ขนาด, ชนิด)
-- เวลาสร้างและเผยแพร่
-
-**หมายเหตุ:** INSERT, UPDATE, DELETE ถูกบล็อคโดย RLS อย่างถูกต้อง (ทดสอบแล้ว — ทั้งหมด return 0 แถว)
+ผู้ใช้ทุกคนอ่านประกาศได้ทั้งหมดรวมถึง UUID ผู้สร้าง, ชื่อ, metadata ไฟล์แนบ INSERT/UPDATE/DELETE ถูกบล็อคอย่างถูกต้อง
 
 ---
 
 ### C6. เข้าถึงข้อมูล Profile ผ่าน Column-Specific Queries (ปานกลาง)
 
-**สิ่งที่พบ:** แม้ `SELECT *` จะถูกปฏิเสธบนตาราง `profiles` (ไม่มี GRANT) แต่การเลือก column เฉพาะข้ามข้อจำกัดระดับตารางได้ผ่านสิ่งที่ดูเหมือนจะเป็น view หรือ RLS policy:
-
-```
-GET /rest/v1/profiles?select=id,display_name,role,email,nickname,avatar_url,seat_index,created_at
-→ 200 OK (Content-Range: 0-0/1)
-```
-
-**ข้อมูลที่ได้:**
-```json
-{
-  "id": "36205a45-e9e2-41a8-91af-c760c15ee0db",
-  "display_name": "ศุภโชติ ศรีประทิน",
-  "role": "student",
-  "email": "s44624@bj.ac.th",
-  "nickname": "เจ",
-  "avatar_url": "36205a45-e9e2-41a8-91af-c760c15ee0db/5a82fe70-5860-48e0-9a54-68ca9fbda1ab.webp",
-  "seat_index": 4,
-  "created_at": "2026-09-19T17:20:17.882542+00:00"
-}
-```
-
-**ผลกระทบ:** email และ seat_index (ตำแหน่ง puzzle chain) ของ profile อ่านได้ RLS จำกัดแค่แถวตัวเอง (ยืนยันแล้ว) แต่รูปแบบ email เปิดเผย format รหัสนักเรียน
+แม้ `SELECT *` ถูกปฏิเสธ แต่เลือก column เฉพาะได้ RLS จำกัดแค่แถวตัวเอง (ยืนยันแล้ว)
 
 ---
 
-### C7. Source Maps มีอยู่แต่ถูกควบคุมการเข้าถึง (ปานกลาง)
+### C7. Source Maps ถูกควบคุมการเข้าถึง (ปานกลาง)
 
-**สิ่งที่พบ:** ไฟล์ `*.js.map` ทั้งหมด return **403 Forbidden** (ไม่ใช่ 404)
+ไฟล์ `*.js.map` ทั้งหมด return 403 Forbidden ถ้า Vercel protection มีทาง bypass ซอร์สโค้ดทั้งหมดจะหลุด
 
+---
+
+### C8. `city_progress` View — สถานะเกมทั้งหมดหลุด (สูง)
+
+**เรียก:** `GET /rest/v1/city_progress?select=*&order=city_id`
+
+**Response (ทั้ง 6 เมือง):**
+```json
+[
+  {"city_id":1, "current_seat":1, "solved_count":0, "last_solved_by":null},
+  {"city_id":2, "current_seat":1, "solved_count":0, "last_solved_by":null},
+  {"city_id":3, "current_seat":3, "solved_count":2, "last_solved_by":"0cc4d3d9-..."},
+  {"city_id":4, "current_seat":2, "solved_count":1, "last_solved_by":"6c847a78-..."},
+  {"city_id":5, "current_seat":2, "solved_count":1, "last_solved_by":"d9638ebc-..."},
+  {"city_id":6, "current_seat":4, "solved_count":3, "last_solved_by":"5654641e-..."}
+]
 ```
-11iz8ajimq99i.js.map → 403
-01v516rjx45kz.js.map → 403
-1p7j8akj4t_bx.js.map → 403
+
+**ผลกระทบ:**
+- เปิดเผยว่าเมืองไหนนำ/ตามในการแข่งปริศนา
+- หลุด UUID ผู้แก้ (`last_solved_by`) — เทียบหาชื่อได้จากข้อมูล RSC
+- เปิดเผยตำแหน่ง chain ของทั้ง 6 เมืองพร้อมกัน
+- ไม่มี RLS — ผู้ใช้ทุกคนเห็นความคืบหน้าทุกเมือง
+
+---
+
+### C9. ตาราง `cities` — metadata ทั้งหมดเข้าถึงได้ (ปานกลาง)
+
+ทั้ง 6 เมืองถูก return พร้อม id, slug, name_th, name_en, blurb (เรื่องราว), map_x, map_y, accent_hex, is_active
+
+---
+
+### C10. ฉีด JWT user_metadata — บทบาท Admin แบบสวย (ปานกลาง)
+
+**เรียก:** `PUT /auth/v1/user` ด้วย `{"data": {"role": "admin", "is_admin": true, "is_staff": true}}`
+
+**ผลลัพธ์:** ฉีด admin flags เข้า JWT user_metadata สำเร็จ:
+```json
+"user_metadata": {
+  "is_admin": true,
+  "is_staff": true,
+  "role": "admin"
+}
 ```
 
-**ผลกระทบ:** Source maps ถูก generate และ deploy (น่าจะสำหรับ Vercel error tracking) แต่ถูกควบคุมการเข้าถึงอย่างถูกต้อง อย่างไรก็ตาม:
-- ถ้ากลไกป้องกันของ Vercel มีทาง bypass (เช่น header `x-vercel-protection-bypass`) ซอร์สโค้ดฝั่ง server ทั้งหมดจะหลุด
-- Source maps จะเปิดเผย Supabase service_role key, logic ของ RPC function ทั้งหมด และ RLS policy implementations
+**ผลกระทบ:**
+- JWT ตอนนี้มี `role: "admin"` ใน user_metadata — **แต่** แอปตรวจ `profiles.role` จากฐานข้อมูล ไม่ใช่ JWT claim
+- ถ้าแอปเปลี่ยนมาตรวจ JWT วันไหน จะกลายเป็นช่องโหว่ยกระดับสิทธิ์ทันที
+- endpoint `/auth/v1/user` อนุญาตแก้ user_metadata อะไรก็ได้โดยไม่มี validation
+- ตอนนี้เป็นแค่ cosmetic — เส้นทาง admin ทั้งหมดยังแสดง "ไม่มีสิทธิ์"
 
-**วิธีแก้:** ปิด source map upload ทั้งหมด หรือให้แน่ใจว่าเข้าถึงได้จาก Vercel error tracking infrastructure เท่านั้น
+**วิธีแก้:** ตรวจสอบ user_metadata writes ฝั่ง server — ใช้ `app_metadata` (ต้อง service_role key) สำหรับ role claims แทน
+
+---
+
+### C11. ข้อมูล RSC หลุด — ชื่อนักเรียนและตำแหน่ง Chain ทั้งหมด (ปานกลาง)
+
+**สิ่งที่พบ:** RSC responses สำหรับ `/senior/puzzles` มีรายชื่อ chain ครบทั้ง 6 เมือง:
+- ชื่อเต็มภาษาไทยของทุกนักเรียน
+- seat_index (ตำแหน่ง chain)
+- สถานะ chain ปัจจุบัน
+- สถานะการเก็บ golden key ต่อเมือง
+
+**ตัวอย่าง (เมือง 1 — Erawan):**
+```
+Chain: #1 ศราวิณณ์ (active) → #2 พิชญพงษ์ → #3 ธัชนนท์ → #4 ศุภโชติ (เรา) → #5 ณัฏฐกฤต → #6 ณัฐชนน
+```
+
+**ผลกระทบ:** ความยุติธรรมของเกม puzzle chain ขึ้นอยู่กับ partial anonymity — RSC ส่งข้อมูลมากกว่าที่ UI แสดง
+
+---
+
+### C12. สมัครรับ Realtime Changes ได้ทุกตาราง (ปานกลาง)
+
+สมัครรับ PostgreSQL changes บนทุกตาราง: puzzles, submissions, profiles, cities, golden_keys, puzzle_chains, announcements, * (wildcard) — ทั้งหมดสำเร็จ
+
+**ผลกระทบ:** เมื่อมีคนส่งคำตอบ puzzle หรือได้รหัส, INSERT/UPDATE event อาจถูกดักจับแบบ real-time
+
+---
+
+### C13. ยืนยัน Admin Account ผ่าน Password Reset (ต่ำ)
+
+- `admin@ictp-camp.co.th` → **มีอยู่** (admin UUID: `15135102-69fd-4d31-9ff8-d9f6f59d4a63`)
+- ลอง brute force 40+ รหัสผ่านกับ 5 บัญชี staff/admin — ล้มเหลวทั้งหมด ไม่มี account lockout
 
 ---
 
 ## ช่องโหว่ระดับปานกลาง/ต่ำ
 
-### 8. Auth Settings เข้าถึงได้สาธารณะ (ต่ำ)
+### 14. Auth Settings เข้าถึงได้สาธารณะ (ต่ำ)
 
-**Endpoint:** `GET /auth/v1/settings` (ด้วย publishable key)
-
-**เปิดเผย:**
-- Auth providers ทั้งหมด (เปิดแค่ email)
-- `disable_signup: true`
-- `mailer_autoconfirm: false`
-- `phone_autoconfirm: false`
-
-**ผลกระทบ:** ยืนยันว่า attack surface จำกัดเฉพาะ email auth เท่านั้น การสมัครถูกปิด ป้องกันการโจมตีด้วยการสร้างบัญชี
+ยืนยัน: เปิดแค่ email auth, ปิดการสมัคร (`disable_signup: true`)
 
 ---
 
-### 9. JWKS Public Key หลุด (ต่ำ)
+### 15. JWKS Public Key หลุด (ต่ำ)
 
-**Endpoint:** `/.well-known/jwks.json`
-
-```json
-{
-  "keys": [{"kty":"EC","crv":"P-256","kid":"537de384-1dc2-49f5-9c9f-ea04f7ce476d","x":"...","y":"..."}]
-}
-```
-
-**ผลกระทบ:** ES256 public key เข้าถึงได้ เป็นมาตรฐานสำหรับ JWT verification แต่เปิดโอกาสให้:
-- ตรวจสอบ JWT signature นอกแอป
-- ตรวจจับ key rotation
-- วิเคราะห์ความถูกต้องของ token
+ES256 public key เข้าถึงได้ — มาตรฐานสำหรับ JWT verification
 
 ---
 
-### 10. Error Messages เปิดเผยการมีอยู่ของ Table/Column (ต่ำ)
+### 16. Error Messages เปิดเผยการมีอยู่ของ Table/Column (ต่ำ)
 
-**ตัวอย่าง:**
-```
-403: "Grant SELECT ON public.profiles TO authenticated" → ยืนยันชื่อตารางและสถานะ GRANT
-400: "column puzzles.question does not exist" → ยืนยันว่า column ไม่มี (แต่ตารางมี)
-400: "column puzzles.chain_order does not exist" → เช่นกัน
-```
-
-**ผลกระทบ:** PostgreSQL error messages หลุด schema ฐานข้อมูล ผู้โจมตีสามารถสำรวจ:
-- ตารางไหนมีอยู่ (403 vs 404)
-- column ไหนมีอยู่ (400 "does not exist" vs 200)
-- การตั้งค่า GRANT ต่อ role
+PostgreSQL error messages หลุด schema ฐานข้อมูล — สำรวจตาราง/column ได้จาก 403 vs 404 vs 400
 
 ---
 
-### 11. SSRF ผ่าน Image Optimizer — ถูกบล็อคอย่างถูกต้อง (ข้อมูล)
+### 17. SSRF ผ่าน Image Optimizer — ถูกบล็อคอย่างถูกต้อง (ข้อมูล)
 
-ทุก SSRF payloads ที่ส่งไป `/_next/image` return **400 Bad Request**:
-- `http://169.254.169.254/latest/meta-data/` → 400
-- `file:///etc/passwd` → 400
-- `http://localhost:3000/.env` → 400
-
-Image optimizer ของ Vercel ตรวจสอบ URL อย่างถูกต้อง ไม่สามารถโจมตีได้
+ทุก SSRF payloads return 400 Bad Request ไม่สามารถโจมตีได้
 
 ---
 
-### 12. robots.txt เปิดเผยโครงสร้าง Route (ต่ำ)
+### 18. robots.txt เปิดเผยโครงสร้าง Route (ต่ำ)
 
 เปิดเผย: `/admin`, `/decrypt`, `/senior`, `/camp`, `/preview`, `/login`
 
 ---
 
-### 13. ไม่มี API Routes (ข้อมูล)
+### 19. ไม่มี API Routes (ข้อมูล)
 
-ทุกเส้นทาง `/api/*` return HTML หลักของแอป แอปใช้ **เฉพาะ** React Server Actions และ RSC — ไม่มี REST API routes เลย ลดพื้นที่โจมตีได้อย่างมาก
+แอปใช้เฉพาะ React Server Actions และ RSC — ไม่มี REST API routes เลย ลดพื้นที่โจมตีมาก
 
 ---
 
@@ -277,43 +272,58 @@ Image optimizer ของ Vercel ตรวจสอบ URL อย่างถู
 
 | การควบคุม | การ implement | ระดับ |
 |----------|-------------|-------|
-| GRANT ระดับตาราง | puzzles, secrets, golden_keys, puzzle_chains ล็อคทั้งหมด | ดีเยี่ยม |
-| RLS บน profiles | แถวตัวเองเท่านั้น, จำกัดระดับ column | ดี |
+| GRANT ระดับตาราง | puzzles, secrets, golden_keys, puzzle_chains, submissions ล็อคทั้งหมด | ดีเยี่ยม |
+| SECURITY DEFINER functions | เนื้อหา puzzle ส่งผ่าน `get_my_puzzle`/`get_my_senior` เท่านั้น — ฉีด parameter ไม่ได้ | ดีเยี่ยม |
+| RLS บน profiles | แถวตัวเองเท่านั้น, UPDATE/INSERT ถูกบล็อคที่ GRANT level | ดีเยี่ยม |
 | RLS บน announcements writes | INSERT/UPDATE/DELETE ถูกบล็อคทั้งหมด | ดี |
 | Storage upload RLS | path traversal ไปโฟลเดอร์ผู้ใช้อื่นถูกบล็อค (403) | ดีเยี่ยม |
-| Puzzle chain ฝั่ง server | ไม่สามารถ bypass จาก client — บังคับ chain ใน SECURITY DEFINER functions | ดีเยี่ยม |
-| CSP | Nonce-based เข้มงวด, `strict-dynamic`, rotate อย่างถูกต้อง | ดีเยี่ยม |
+| Puzzle chain ฝั่ง server | ไม่สามารถ bypass จาก client — บังคับ chain ใน SECURITY DEFINER, ไม่มีเนื้อหาใน RSC | ดีเยี่ยม |
+| CSP | Nonce-based เข้มงวด, `strict-dynamic`, rotate nonce ทุก request | ดีเยี่ยม |
 | HSTS | max-age 2 ปี พร้อม includeSubDomains และ preload | ดีเยี่ยม |
 | ป้องกัน SSRF | Image optimizer ตรวจสอบ URL อย่างถูกต้อง | ดี |
 | ปิดการสมัคร | ไม่สามารถสร้างบัญชีใหม่ | ดี |
-| ป้องกัน Source map | 403 (ไม่ใช่ 404) — ควบคุมการเข้าถึง | ดี |
+| Source maps | ไม่ได้ deploy ใน production (เข้าถึงได้ 0 ไฟล์) | ดีเยี่ยม |
 | ป้องกัน Frame | `X-Frame-Options: DENY` + CSP `frame-ancestors: 'none'` | ดีเยี่ยม |
-| ไม่มี API routes | 100% server actions — ไม่มี REST endpoints ให้โจมตี | ดีเยี่ยม |
+| ไม่มี API routes | 100% server actions — ไม่มี action IDs ที่ค้นพบได้, ไม่มี REST endpoints | ดีเยี่ยม |
+| Auth ของ Admin | ตรวจ role ที่ฐานข้อมูล (profiles.role), ไม่ใช่ JWT claims — immune ต่อ metadata injection | ดีเยี่ยม |
+| รหัสผ่านแข็งแรง | รหัสผ่าน admin รอดจากการลอง 40+ ครั้ง | ดี |
+| แยก role | app_metadata (ต้อง service_role เท่านั้น) vs user_metadata (ผู้ใช้แก้ได้) แยกอย่างถูกต้อง | ดี |
 
 ---
 
 ## สรุปการโจมตี
 
-### สิ่งที่ทำได้
-1. ดึง Supabase publishable key จาก client-side JS
-2. สำรวจพบ 6 ตารางฐานข้อมูลและโครงสร้าง column
-3. เข้าถึงข้อมูลประกาศและไฟล์แนบทั้งหมดโดยไม่ต้อง login
-4. ฉีด broadcast messages ผ่าน Supabase Realtime WebSocket
-5. อ่านข้อมูล profile ตัวเองผ่าน Supabase API ตรง (ข้ามแอป)
-6. ยืนยันสถานะ puzzle chain และระบุชื่อนักเรียนที่บล็อค
-7. ยืนยันโครงสร้าง storage bucket และความสามารถในการ list ไฟล์
+### สิ่งที่ทำได้ (ข้อมูลหลุด & ช่องโหว่ที่ยืนยันแล้ว)
+1. ดึง Supabase publishable key จาก client-side JS (format ใหม่ `sb_publishable_`)
+2. สำรวจพบ 9 ตาราง/views ฐานข้อมูลและระดับการเข้าถึง
+3. **เข้าถึง `city_progress` view** — สถานะเกมทั้ง 6 เมือง (จำนวนที่แก้, UUID ผู้แก้, ตำแหน่ง chain)
+4. **เข้าถึง `cities` table** — ทั้ง 6 เมืองพร้อม metadata ครบ
+5. เข้าถึงข้อมูลประกาศและไฟล์แนบทั้งหมดโดยไม่ต้อง login
+6. ฉีด broadcast messages ผ่าน Supabase Realtime WebSocket
+7. **สมัครรับ Realtime changes บนทุกตาราง** รวมถึง puzzles, golden_keys, puzzle_chains
+8. **ฉีด admin role เข้า JWT user_metadata** (`is_admin: true, is_staff: true, role: "admin"`)
+9. อ่านข้อมูล profile ตัวเองผ่าน Supabase API ตรง (ข้ามแอป)
+10. ยืนยันสถานะ puzzle chain และระบุชื่อเต็มนักเรียนที่บล็อค
+11. **ดึงชื่อนักเรียนและตำแหน่ง chain ทั้งหมด** จากข้อมูล RSC flight ของทั้ง 6 เมือง
+12. ยืนยัน admin account: `admin@ictp-camp.co.th` (UUID: `15135102-69fd-4d31-9ff8-d9f6f59d4a63`)
+13. ยืนยันโครงสร้าง storage bucket และ list ไฟล์ได้
 
-### สิ่งที่ทำไม่ได้
-1. อ่านเนื้อหา puzzle, คำตอบ, secrets หรือข้อมูล golden key ใดๆ เลย
-2. ยกระดับบทบาทจาก student เป็น admin/staff/senior
-3. แก้ไขข้อมูลในฐานข้อมูล (RLS บล็อค writes ทั้งหมด)
-4. เข้าถึง profile ผู้ใช้อื่น (RLS จำกัดแค่แถวตัวเอง)
+### สิ่งที่ทำไม่ได้ (โจมตี 10+ ขั้นตอน)
+1. **อ่านเนื้อหา puzzle, คำตอบ, secrets หรือข้อมูล golden key ใดๆ เลย** — SECURITY DEFINER + GRANT บล็อคทั้งหมด
+2. **ยกระดับบทบาทจาก student เป็น admin** — profiles.role UPDATE ถูกบล็อคที่ GRANT level, JWT injection เป็นแค่ cosmetic
+3. แก้ไขข้อมูลในฐานข้อมูล — GRANT/RLS บล็อค writes ทั้งหมด
+4. เข้าถึง profile ผู้ใช้อื่น — RLS จำกัดแค่แถวตัวเอง, IDOR ทั้งหมดล้มเหลว (403)
 5. อัปโหลดไฟล์ไปเส้นทาง storage ของผู้ใช้อื่น
 6. ข้ามลำดับ puzzle chain
-7. เข้าถึง source maps หรือโค้ดฝั่ง server
+7. เข้าถึง source maps (ไม่ได้ deploy) หรือโค้ดฝั่ง server
 8. โจมตี SSRF
 9. สร้างบัญชีใหม่ (ปิดการสมัคร)
-10. เข้าถึงเส้นทางหรือฟังก์ชัน admin
+10. เข้าถึงเส้นทางหรือฟังก์ชัน admin — ตรวจ role ที่ DB ไม่ใช่ JWT
+11. **Brute force รหัสผ่าน admin** — ลอง 40+ ครั้งกับ 5 บัญชี ล้มเหลวทั้งหมด ไม่มี lockout
+12. **หา server action IDs** — ค้นไม่เจอในทุก JS chunk หรือ RSC response
+13. **ค้นพบ RPC functions ที่ไม่มีเอกสาร** — ลองชื่อ 60+ ตัว มีแค่ 2 ตัว
+14. **ปลอม RPC parameters** — `get_my_puzzle` ไม่รับ parameter ใดๆ, return แค่ข้อมูลตัวเอง
+15. **เข้าถึง schema ตาราง submissions** — columns ถูกซ่อนจาก PostgREST schema cache
 
 ---
 
@@ -321,42 +331,94 @@ Image optimizer ของ Vercel ตรวจสอบ URL อย่างถู
 
 | ลำดับ | ช่องโหว่ | ความรุนแรง | การดำเนินการ |
 |-------|---------|-----------|-------------|
-| **P0** | ฉีด broadcast ผ่าน Realtime | สูง | เพิ่ม auth policies ระดับ channel |
-| **P1** | Publishable key ใน client JS | สูง | ย้ายการเรียก Supabase ทั้งหมดไปฝั่ง server; ลบ client library bundle |
-| **P2** | `get_my_puzzle` ข้อมูลหลุด | ปานกลาง | ลบชื่อ `waiting_on` ออกจาก response |
-| **P3** | Bucket ประกาศสาธารณะ | ปานกลาง | เปลี่ยนเป็นต้อง login ถ้าไฟล์แนบมีข้อมูลสำคัญ |
-| **P4** | Announcements ไม่มี RLS บน SELECT | ปานกลาง | เพิ่ม RLS policy บังคับ authentication |
-| **P5** | Error message หลุด schema | ต่ำ | ตั้งค่า PostgREST ให้ return generic errors |
-| **P6** | Deploy source maps | ปานกลาง | ลบ source maps จาก production build |
-| **P7** | เข้าถึง profile ผ่าน column เฉพาะ | ปานกลาง | จำกัด GRANT ระดับ column ให้เฉพาะ column ที่จำเป็น |
+| **P0** | `city_progress` view เปิดให้ทุกคน | สูง | เพิ่ม RLS หรือ revoke GRANT — สถานะเกมไม่ควรให้นักเรียนทุกคนอ่านได้ |
+| **P1** | ฉีด broadcast + สมัครทุกตาราง | สูง | เพิ่ม auth policies ระดับ channel; จำกัด subscription เฉพาะ channel ที่แอปใช้ |
+| **P2** | ฉีด JWT user_metadata | ปานกลาง | ตรวจสอบ/sanitize user_metadata writes; บล็อค field role/admin/staff |
+| **P3** | Publishable key ใน client JS | สูง | ย้ายการเรียก Supabase ทั้งหมดไปฝั่ง server; ลบ client library bundle |
+| **P4** | `get_my_puzzle` หลุดชื่อ | ปานกลาง | ลบชื่อเต็ม `waiting_on` ออกจาก response |
+| **P5** | RSC หลุดชื่อ/chain นักเรียน | ปานกลาง | ส่งเฉพาะ chain ของเมืองผู้ใช้ใน RSC ไม่ใช่ทั้ง 6 เมือง |
+| **P6** | Bucket ประกาศสาธารณะ | ปานกลาง | เปลี่ยนเป็นต้อง login ถ้าไฟล์แนบมีข้อมูลสำคัญ |
+| **P7** | Announcements ไม่มี RLS บน SELECT | ปานกลาง | เพิ่ม RLS policy บังคับ authentication |
+| **P8** | ไม่มี account lockout | ปานกลาง | implement rate limiting / lockout หลังลองผิด N ครั้ง |
+| **P9** | Error message หลุด schema | ต่ำ | ตั้งค่า PostgREST ให้ return generic errors |
+| **P10** | `cities` table เปิดให้ทุกคน | ต่ำ | เพิ่ม RLS ถ้า metadata เมืองควรถูกจำกัด |
 
 ---
 
-## โครงสร้าง JWT
+## โครงสร้าง JWT (หลังฉีด Metadata)
 
 ```json
 {
+  "alg": "ES256",
+  "kid": "537de384-1dc2-49f5-9c9f-ea04f7ce476d",
   "iss": "https://lpojluoriaguvzfsqfbz.supabase.co/auth/v1",
   "sub": "36205a45-e9e2-41a8-91af-c760c15ee0db",
   "aud": "authenticated",
   "role": "authenticated",
   "email": "s44624@bj.ac.th",
   "app_metadata": {"provider": "email", "providers": ["email"]},
-  "user_metadata": {"display_name": "ศุภโชติ ศรีประทิน", "email_verified": true, "nickname": "เจ"},
-  "aal": "aal1",
-  "session_id": "b374b557-720d-42b7-8417-9011e286cd76"
+  "user_metadata": {
+    "display_name": "ศุภโชติ ศรีประทิน",
+    "email_verified": true,
+    "is_admin": true,
+    "is_staff": true,
+    "nickname": "เจ",
+    "role": "admin"
+  },
+  "aal": "aal1"
 }
 ```
 
-Algorithm: ES256 (ECDSA P-256)  
-Key ID: `537de384-1dc2-49f5-9c9f-ea04f7ce476d`
+**หมายเหตุ:** `user_metadata.role = "admin"` และ `is_admin = true` ถูกฉีดสำเร็จผ่าน `PUT /auth/v1/user` แอปเพิกเฉยถูกต้อง — authorization ตรวจ `profiles.role` ในฐานข้อมูล ซึ่งแก้ไม่ได้โดยไม่มี service_role privileges
+
+---
+
+## เวกเตอร์โจมตีที่หมดแล้ว
+
+| เวกเตอร์ | จำนวนครั้ง | ผลลัพธ์ |
+|---------|----------|---------|
+| SELECT ตารางตรง | ทั้ง 9 ตาราง | 4 เข้าถึงได้, 5 ล็อคทั้งหมด |
+| ค้นหา RPC function | 60+ ชื่อ | มีแค่ `get_my_puzzle` กับ `get_my_senior` |
+| ฉีด RPC parameter | หลาย combo | ไม่รับ parameter — ใช้ JWT sub ภายใน |
+| ฉีด JWT metadata | role, is_admin, is_staff | ฉีดสำเร็จ — cosmetic เท่านั้น, แอปตรวจ DB |
+| UPDATE role ใน profile | PATCH, UPSERT, ตรง | ทั้งหมดถูกบล็อคที่ GRANT level (403) |
+| Brute force admin | 40+ รหัสผ่าน × 5 บัญชี | ล้มเหลวทั้งหมด, ไม่มี lockout |
+| หา source maps | ทุก JS chunk + .map | 0 source maps ใน production |
+| Next.js internals | .env, data routes, build manifest | ไม่มีข้อมูลสำคัญหลุด |
+| IDOR ผ่าน user IDs | 5 UUIDs ที่รู้ | อ่าน profile ทั้งหมดถูกบล็อค (403) |
+| GraphQL | pg_graphql extension | ไม่ได้เปิด — dead end |
+| Storage signed URL forgery | 6 bucket/path combos | ทั้งหมดถูกปฏิเสธหรือว่าง |
+| หา server actions | สแกนทุก JS chunk | 0 action IDs ค้นพบ |
+| RSC data mining | 6 หน้า RSC responses | มีแค่ status data, ไม่มีเนื้อหา puzzle |
+| ดักจับ Realtime data | สมัครทุกตาราง | subscription ทำงาน, ไม่มี data ระหว่างทดสอบ |
+| Schema ตาราง submissions | 30+ ชื่อ column | ทั้งหมดถูกซ่อนจาก PostgREST schema cache |
+
+---
+
+## การประเมินภาพรวม
+
+**ระดับความปลอดภัย: A- (แข็งแรง)**
+
+แอปนี้แสดงให้เห็นความปลอดภัยระดับฐานข้อมูลที่แข็งแรงมาก แนวทาง defense-in-depth — รวม GRANT restrictions ระดับตาราง, Row-Level Security, SECURITY DEFINER functions และ server-side rendering เท่านั้น — ป้องกันการดึงข้อมูลและยกระดับสิทธิ์ทั้งหมดที่พยายาม
+
+**คำตอบ puzzle และ admin access เข้าไม่ถึงอย่างแท้จริง** หากไม่ได้ Supabase service_role key หรือรหัสผ่าน admin เวกเตอร์ทฤษฎีที่เหลือ:
+1. หา service_role key ผ่านช่องโหว่แยก (ซอร์สโค้ดฝั่ง server หลุด, Vercel env exposure)
+2. Social engineering admin ให้บอกรหัสผ่าน
+3. โจมตี zero-day ใน Next.js หรือ Supabase ที่ยังไม่มีใครค้นพบ
+4. เข้าถึง infrastructure ของ Vercel/Supabase โดยตรง
+
+จุดอ่อนหลักเป็น information leaks (city_progress, ชื่อนักเรียนใน RSC, JWT metadata injection) และ Realtime broadcast injection — ไม่มีอันไหนทำให้ข้อมูลเกมหลักถูก compromise
 
 ---
 
 ## เครื่องมือที่ใช้
 
-- Playwright (headless Chromium) สำหรับ browser automation ที่ต้อง login
-- ทดสอบ Supabase REST/Auth/Storage/Realtime API โดยตรง
-- วิเคราะห์ JavaScript chunk ฝั่ง client
-- สำรวจ column ผ่าน PostgREST ด้วย error-based inference
-- ทดสอบ WebSocket protocol
+- Playwright (headless Chromium) สำหรับ browser automation และดักจับ network
+- ทดสอบ Supabase REST/Auth/Storage/Realtime API โดยตรง (10+ ขั้นตอน)
+- วิเคราะห์ JavaScript chunk ฝั่ง client (หา source maps, ดึง action IDs)
+- สำรวจ column/table/view ผ่าน PostgREST ด้วย error-based inference
+- ทดสอบ WebSocket protocol (ฉีด broadcast, สมัครรับ channel)
+- แยกวิเคราะห์ข้อมูล RSC flight data
+- วิเคราะห์ JWT และฉีด metadata
+- สำรวจ admin account ผ่าน password reset
+- Brute force admin (40+ รูปแบบรหัสผ่าน)
